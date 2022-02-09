@@ -8,7 +8,9 @@
    (defn keyword-identical? [a b]
      (identical? a b)))
 
-(defn make-ident [type id]
+(defn make-ident
+  "Useful for future-proofing against possible changes."
+  [type id]
   [type id])
 
 (defn parse-joins [spec joins]
@@ -66,7 +68,25 @@
     {:entities {}}
     spec))
 
-(defn configure [init-db spec]
+(defn configure
+  "Associates `spec` to `init-db` as its schema used for normalization operations.
+   
+   ---
+   Example:
+   ```
+   (def schema
+     {::folder
+      {:type :entity
+       :primary-key :id
+       :attrs {}
+       :joins {:folder/contains [:many ::file]}}})
+   
+   (defonce data-ref
+     (-> {}
+         (db/configure schema)
+         (atom)))
+   ```"
+  [init-db spec]
   ;; FIXME: should this use a special key instead of meta?
   (let [schema (parse-schema spec)
         m {::schema schema
@@ -192,6 +212,8 @@
     imports))
 
 (defn merge-seq
+  "Normalizes `coll` of items of `entity-type` into `data` (db) at `target-path`.
+   See [[add]] for more info."
   ([data entity-type coll]
    (merge-seq data entity-type coll nil))
   ([data entity-type coll target-path]
@@ -223,6 +245,31 @@
            (assoc-in target-path idents))))))
 
 (defn add
+  "Normalizes the `item` of `entity-type` into `data` at `target-path`.
+
+   * `data` - 'proxy' db with schema provided in transaction env.
+   * `entity-type` of `item` being added. Should be present in schema. 
+   * `item` - a map of data to add.
+   * `target-path` - where to 'attach' the `item`.
+
+   ---
+   Examples:
+   ```clojure
+   ;; in tx
+   (update tx-env :db db/add ::node data-to-add [:root])
+
+   ;; repl testing
+   (def schema
+     {::node
+      {:type :entity
+       :primary-key :id
+       :attrs {}
+       :joins {:children [:many ::node]}}})
+
+   (-> {}
+       (db/configure schema)
+       (db/add ::node {:id 0 :children [{:id 1} {:id 2}]} [::root]))
+   ```"
   ([data entity-type item]
    (add data entity-type item nil))
   ([data entity-type item target-path]
@@ -251,7 +298,10 @@
            target-path
            (update-in target-path conj ident))))))
 
-(defn update-entity [data entity-type id update-fn & args]
+(defn update-entity
+  "Updates entity of `entity-type` and `id` in `data` (db) with `update-fn`
+   and optional `args`. This docstring is longer than the fn!"
+  [data entity-type id update-fn & args]
   ;; FIXME: validate that both entity-type is defined and id matches type
   (update data (make-ident entity-type id) #(apply update-fn % args)))
 
@@ -265,7 +315,12 @@
 
 ;; keep this as the very last thing since we excluded clojure remove
 ;; don't want to write code that assumes it uses core remove
-(defn remove [data thing]
+(defn remove
+  "Removes `thing` from `data` root. Will *not* remove any remaining
+   references, except the one in the set of all entities of a certain type.
+   * `data` - the 'proxy' db map available in transactions.
+   * `thing` - either an ident or a map like `{:db/ident ident ...}`"
+  [data thing]
   (cond
     (ident? thing)
     (dissoc data thing)
@@ -276,7 +331,10 @@
     :else
     (throw (ex-info "don't know how to remove thing" {:thing thing}))))
 
-(defn remove-idents [data idents]
+(defn remove-idents
+  "Given a coll of `idents`, [[remove]]'s all corresponding entities from `data`.
+   `data` should be the 'proxy' db map available in transactions."
+  [data idents]
   (reduce remove data idents))
 
 (defprotocol IObserved

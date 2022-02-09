@@ -11,7 +11,9 @@
   (and (atom x)
        (::rt @x)))
 
-(defn prepare [init data-ref runtime-id]
+(defn prepare
+  "Initializes the runtime atom. `data-ref` – db atom."
+  [init data-ref runtime-id]
   (let [rt-ref
         (-> init
             (assoc ::rt true

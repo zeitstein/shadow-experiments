@@ -38,6 +38,48 @@
 ;; but is the easiest to use with hot-reload in mind
 
 (defmulti attr
+  "Define 'computed attributes'. The attribute is the dispatch-fn of the method.
+   The return of this function will be included in query results for
+   that attribute. *Must not return lazy seq.*
+
+   The methods are called with the following args:
+   1. `env` - component env
+   2. `db` - the db map
+   3. `current` - the entity
+   4. `query-part` – the dispatch-fn of the method, i.e. an EQL attribute
+   5. `params` - optional parameters specified with EQL attributes.
+
+   Called when building query results for each EQL attribute. See [[::default]].
+   Keys access within the method will be 'observed' – meaning the query will
+   re-run if said keys were modified. Keep this in mind with respect to
+   performance.   
+   
+   ---   
+   Example:
+   
+   ```clojure
+   ;; in a component
+   (bind query-result
+     (sg/query-ident ident [::foo '(::bar {:test 1})]))
+
+   ;; elsewhere
+   (defmethod attr ::foo
+     [env db current query-part params]
+     ;; the ::default impl
+     (get current query-part :db/undefined)
+   )
+
+   ;; {:test 1} available in `params` for
+   (defmethod attr ::bar
+     [_ _ _ _ params])
+   
+   ;; another example
+   (defmethod eql/attr ::m/num-active
+     [env db current _ params]
+     (->> (db/all-of db ::m/todo)
+         (remove ::m/completed?)
+         (count)))
+   ```"
   (fn [env db current query-part params] query-part)
   :default ::default)
 
