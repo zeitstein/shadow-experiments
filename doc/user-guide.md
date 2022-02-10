@@ -117,7 +117,7 @@ We'll be looking at the `ui-dir` component from our example, step by step.
 
 ```clojure
 (defc ui-dir [ident]
-  (bind {:dir/keys [name open? contains] ::keys [hidden?] :as props}
+  (bind {:dir/keys [name open? contains] ::keys [hidden?] :as query-result}
     (sg/query-ident ident [:dir/name :dir/open? :dir/contains ::hidden?]))
 
   (bind num-visible
@@ -146,10 +146,10 @@ We'll be looking at the `ui-dir` component from our example, step by step.
 
 #### Hooks
 
-*Hooks* are essentially values that are "wired up together" at compile time. One can think of them as being nodes in a directed graph, where a node's value will update only if the preceding values it is connected to change. This works together with the fragment macro `<<` to provide granular DOM updates. It helps to look at an example:
+To a first approximation, *hooks* can be thought of as values that are "wired up together" at compile time. Think nodes in a directed graph, where a node's value will update only if the preceding value it is connected to changes. This works together with the fragment macro `<<` to provide granular DOM updates. It helps to look at an example:
 
 ```clojure
-(bind {:dir/keys [name open? contains] ::keys [hidden?] :as props}
+(bind {:dir/keys [name open? contains] ::keys [hidden?] :as query-result}
   (sg/query-ident ident [:dir/name :dir/open? :dir/contains ::hidden?]))
 
 (bind num-visible
@@ -157,12 +157,14 @@ We'll be looking at the `ui-dir` component from our example, step by step.
 ```
 
 Above:
-- a hook named `num-visible` is initialized to `(expensive-computation contains)` on component mount,
-- `expensive-computation` will only re-trigger if `contains` changes – and not the rest of `props`,
-- and, in this case, only the bits depending on `num-visible` and `contains` will be updated in the DOM.
-Technically, `num-visible` is the simplest type of a hook 'under the hood' (a simple value, but "wired up" in the aforementioned sense). `props` are a different type of hook, implementing behaviour specific to [queries](#queries).
+- A hook is created and its value is initialized to `(expensive-computation contains)` on component mount. `num-visible` is "bound" to this value. 
+- `expensive-computation` will only re-trigger (and `num-visible` update) if `contains` changes – but not if anything else from `query-result` changes.
+- In this case, only the bits depending on `num-visible` and `contains` will be updated in the DOM.
+- The hook will be "destroyed" when component unmounts from the DOM.
 
-These values are hooked up to the component lifecycle. (We don't much like the term "hooks", so if you have a better idea - let us know!)
+Technically, hooks are a custom datatype managed by components. This is completely kept "under the hood" and you mostly don't need to think about the underlying hooks. However, one thing to be aware of is that there are [different types of hooks](https://github.com/thheller/shadow-experiments/blob/master/doc/components.md). The simplest type (`SimpleVal`) underlies `num-visible`, while `query-result` is bound to a type (`QueryHook`) which implements [query](#querying-for-data)-specific behaviour through `sg/query-ident`.
+
+(We don't much like the term "hooks", so if you have a better idea - let us know!)
 
 The *component macro* `defc` takes four types of hooks:
 - `(bind <name> <&body>)` sets up a named binding that can be used in later hooks. If the value changes all other hooks using that binding will also be triggered.
@@ -174,13 +176,13 @@ Note that all of these execute in order so `bind` and `hook` cannot be used afte
 
 There are some **rules for hooks**:
 - The `defc` macro already enforces that things are called in the correct order.
-- As indicated, `sg/query-ident` (`QueryHook`) and `expensive-computation` (`SimpleVal`) produce [different types of hooks](https://github.com/thheller/shadow-experiments/blob/master/doc/components.md). A rule is that a hook, once created, must remain consistent. Basically the only thing that should be avoided is conditionals. Something like:
+- Once created, a hook's type must remain consistent. Basically the only thing that should be avoided is conditionals like:
   ```clojure
   (bind foo
     (if bar (sg/query-ident baz) (expensive-computation baz)))
 
   ```
-  can lead to errors, since the value of `bar` can change without the component re-mounting.
+  This can lead to errors since the value of `bar` can change – and hence the underlying hook type – without the component re-mounting.
 
 <!-- !todo remove? -->
 - `env-watch`
@@ -215,7 +217,7 @@ The *component environment* (`env` above) is a place to store data that should b
 
 #### Effects
 
-*Effect* are mainly meant to be used to make manual modifications to the DOM based on data changes (e.g. help out with transitions/animations; for data modifications use [transactions](#transactions)). Each effect takes a callback function, which may return an optional clean-up function. There are: `effect`, `mount-effect` and `render-effect`. Current API is:
+*Effects* are mainly meant to be used to make manual modifications to the DOM based on data changes (e.g. help out with transitions/animations; for data modifications use [transactions](#transactions)). Each effect takes a callback function, which may return an optional clean-up function. There are: `effect`, `mount-effect` and `render-effect`. Current API is:
 
 ```clojure
 (defc ...
@@ -287,7 +289,7 @@ Components query for data through `sg/query-ident` and `sg/query-root`. The firs
 
 ;; in a component, query results return
 ;; {:dir/contains computed-above, :dir/name ...}
-(bind {:dir/keys [name open? contains] :as query-results}
+(bind {:dir/keys [name open? contains] :as query-result}
   (sg/query-ident ident [:dir/name :dir/open? :dir/contains]))
 ```
 
@@ -299,7 +301,7 @@ Under the hood, *shadow-grove* keeps track of attributes/keys that were queried 
 
 Note, however, that all `ident`s that were accessed in `eql/attr :dir/contains` above will also be "observed". So, in addition to `name` and `open?` for a dir with `ident`, all the dirs and files it contains will also be tracked. Thus, modifying something (during a transaction) in these idents will cause the above query to re-run. This is mostly fine and sometimes necessary, but it is something to keep in mind when it comes to performance.
 
-### Running transactions
+### Transactions
 
 The db is modified through *transactions*. The intent is to keep UI-related concerns separate from data/backend concerns. Transactions are simply event maps we've seen earlier.
 
