@@ -7,6 +7,30 @@
     [shadow.experiments.arborist.attributes :as attr]))
 
 (defn init!
+  "Use to intercept clicks on 'internal' links and HTML `History` modifications to:
+  1. update the state of `History` (e.g. update the URL)
+  2. trigger the `:ui/route!` event (for which the handler is defined by the user).
+
+  `config` map:
+  * `:start-token` – replaces the \"/\" URL on init. Defaults to `\"/\"`. Should
+                     start – but not end – with `/`.
+  * `:path-prefix` – a common URL base to use. Defaults to `\"\"`. Should start
+                     – but not end – with `/`.
+  * `:use-fragment` – pass `true` if you want to use hash-based URLs. Defaults
+                      to `false`.
+  * `:root-el` - optional DOM node to set the click listener on. Defaults to
+                 `document.body`.
+
+  ### Usage
+  - This function should be called before component env is initialised (e.g.
+    before [[shadow.experiments.grove/render]]).
+  - Set the `:ui/href` attribute on anchors for internal links. (Unlike regular 
+    `href` will automatically take care of `path-prefix` and `use-fragment`.)
+  - Register handler for the event `{:e :ui/route! :token token :tokens tokens}`.
+  - Only pure clicks with main mouse button (no keyboard modifiers) will be intercepted.
+  - The `:ui/redirect!` *fx* handler will be registered and can be 'called' with:
+    * `:token` – URL to redirect to (a string starting with `/`)
+    * `:title` – optional. `title` arg for `history.pushState`"
   [rt-ref
    {:keys [start-token path-prefix use-fragment root-el]
     :or {start-token "/"
