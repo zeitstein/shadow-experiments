@@ -8,6 +8,21 @@ This document is meant to provide an overview and surface the most important fun
 
 Since *shadow-grove* is mostly built on top of protocols, one can extend/replace some of its defaults (e.g. using Fulcro/DataScript/etc. for data management). That will not be covered here, but we feel is well worth mentioning.
 
+- [UI Components](#ui-components)
+  - [The Fragment Macro `<<`](#the-fragment-macro-)
+  - [Lists of DOM elements](#lists-of-dom-elements)
+  - [The `defc` component macro](#the-defc-component-macro)
+- [DB and Query](#db-and-query)
+  - [DB schema and architecture](#db-schema-and-architecture)
+  - [Querying for data](#querying-for-data)
+  - [Transactions](#transactions)
+  - [fx – doing side effects](#fx--doing-side-effects)
+- [Dev tools](#dev-tools)
+- [More TODO](#more-todo)
+  - [HTML History](#html-history)
+  - [DOM node ref](#dom-node-ref)
+  - [Keyboard listener](#keyboard-listener)
+
 ### Full app examples
 
 If you'd like to take a look at full app examples:
@@ -113,6 +128,21 @@ Functions which allow *shadow-grove* to optimize managing sequences of DOM nodes
 
 The goal of the [component design](https://github.com/thheller/shadow-experiments/blob/master/doc/components.md#components) is to gain access to incremental computation based on application events (e.g. state changes).
 
+Here's a simple example of "incremental computation":
+```clojure
+(defn baz-defn [{:keys [a b]}]
+  (let [x (print-inc "x" a)
+        y (print-inc "y" b)]
+    (<< [:div x y])))
+
+;; x is recomputed only if a changes
+(defc baz-defc [{:keys [a b]}]
+  (bind x (print-inc "x" a))
+  (bind y (print-inc "y" b))
+
+  (render (<< [:div x y])))
+```
+
 We'll be looking at the `ui-dir` component from our example, step by step.
 
 ```clojure
@@ -180,7 +210,6 @@ There are some **rules for hooks**:
   ```clojure
   (bind foo
     (if bar (sg/query-ident baz) (expensive-computation baz)))
-
   ```
   This can lead to errors since the value of `bar` can change – and hence the underlying hook type – without the component re-mounting.
 
@@ -190,15 +219,22 @@ There are some **rules for hooks**:
 
 #### Events
 
-*Events* (both DOM and transactions) are declared as data:
+*Events* are declared as data:
 
 ```clojure
-;; event declaration
+{:e ::event-name :data1 "data1" :data2 "data2" ,,,}
+```
+
+Events can trigger both DOM event handlers and db operations (as [transactions](#transactions)):
+
+```clojure
+;; DOM event declaration
 [:span.name {:on-click {:e ::dir-click! :ident ident}} name]
 
-;; event handler
+;; DOM event handler
 (event ::dir-click! [env {:keys [ident] :as event-map} event]
   (if (.-ctrlKey e)
+    ;; will run event ::toggle-hide! as a db transaction
     (sg/run-tx env {:e ::toggle-hide! :ident ident})
     (sg/run-tx env {:e ::toggle-open! :ident ident})))
 ```
@@ -212,7 +248,6 @@ The *component environment* (`env` above) is a place to store data that should b
 ```
 
 <!-- todo -->
-- fx – side effects in regular events are controlled via :fx. it is expected to do side effects triggered by events.
 - `dispatch-up!`
 
 #### Effects
@@ -229,11 +264,11 @@ The *component environment* (`env` above) is a place to store data that should b
 
 The normalized db is organised as a flat map, with entity idents as keys. At points of 'contact' with the db (e.g. in event handlers) the db is available as a map one can `update`, `assoc-in`, etc.
 
-A basic EQL engine is available. Instead of composing a big query at UI root, we feel that each component should just query for the data it needs. (Certainly a trade off, e.g. with respect to remote interactions.) Components can get their data in a declarative way without being coupled to where that data is actually coming from.
+A basic EQL engine is available. Instead of composing a big query at UI root, we feel that each component should just query for exactly the data it needs. (Certainly a trade off, e.g. with respect to remote interactions.) Components can get their data in a declarative way without being coupled to where that data is actually coming from.
 
 Nevertheless, it is still very much about your UI being a function of your data.
 
-### DB – schema and architecture
+### DB schema and architecture
 
 A *schema* is defined to enable normalization helpers.
 - *entity types* – used track different types of entities you might have in your data. (`::dir` and `::file` in example below.)
@@ -276,7 +311,7 @@ This is basically what `::load!` does in our example. (We'll get to the `db/...`
 
 ### Querying for data
 
-Components query for data through `sg/query-ident` and `sg/query-root`. The first can do a simple ident lookup, while both can run an optional EQL query. (Using EQL is, of course, somewhat less performant than just returning the map under ident from db.)
+Components query for data through `sg/query-ident` and `sg/query-root`. The first can do a simple ident lookup, while both can run an optional EQL query. (Using EQL is, of course, somewhat less performant than just returning the map under ident from db.) It is encouraged to structure your component tree so as to use as many fine grained ident lookup queries as possible, as those are the most efficient.
 
 *Computed attributes* are available as `eql/attr` methods. These methods' dispatch functions are EQL attributes and their return will be included in query results for this attribute.
 
@@ -297,18 +332,18 @@ Components query for data through `sg/query-ident` and `sg/query-root`. The firs
 
 Besides computed attributes, EQL is useful when you need to 'join' multiple normalized pieces into a single denormalized data tree.
 
-Under the hood, *shadow-grove* keeps track of attributes/keys that were queried for. So, in the example above, `name`, `open?` and `contains` for this particular `ident`. This information, in conjuction with observing what's changed during transactions (more on this in a bit), enables *shadow-grove* to do efficient refreshes of the UI. For more details, consult the [doc](https://github.com/thheller/shadow-experiments/blob/master/doc/what-the-heck-just-happened.md).
+Under the hood, *shadow-grove* keeps track of idents that were queried for. So, in the example above, `name`, `open?` and `contains` for this particular `ident`. This information, in conjuction with observing what's changed during transactions (more on this in a bit), enables *shadow-grove* to do efficient refreshes of the UI. For more details, consult the [doc](https://github.com/thheller/shadow-experiments/blob/master/doc/what-the-heck-just-happened.md).
 
 Note, however, that all `ident`s that were accessed in `eql/attr :dir/contains` above will also be "observed". So, in addition to `name` and `open?` for a dir with `ident`, all the dirs and files it contains will also be tracked. Thus, modifying something (during a transaction) in these idents will cause the above query to re-run. This is mostly fine and sometimes necessary, but it is something to keep in mind when it comes to performance.
 
 ### Transactions
 
-The db is modified through *transactions*. The intent is to keep UI-related concerns separate from data/backend concerns. Transactions are simply event maps we've seen earlier.
+The db is modified through *transactions*. The intent is to keep UI-related concerns separate from data/backend concerns. Transactions are simply event maps we've seen earlier with corresponding *event handlers*.
 
 - `run-tx` – runs a transaction from within a DOM event handler.
 - `run-tx!` – runs a transaction outside of the component context.
 
-Example of running a transaction and registering *event handlers*:
+Examples of running transactions and registering event handlers:
 ```clojure
 ;; outside of the component context, e.g. on UI init
 (sg/run-tx! rt-ref {:e ::load!})
@@ -332,18 +367,96 @@ Example of running a transaction and registering *event handlers*:
 ```
 <!-- todo don't include this alternative? -->
 
-As mentioned above, events for which no `(event ...)` handler is defined (anywhere in the component tree) will automatically run the transaction with `event-map`. This reduces boilerplate when your events don't need to handle DOM-related stuff. In the example above, if `(.ctrlKey event)` was not needed, the whole `(event ::toggle-hide!) ...` can be omitted.
+Note that handlers are provided with, modify and return the transaction environment `tx-env`. Although the event systems are not identical, reading about [*re-frame*'s event handlers](https://day8.github.io/re-frame/EffectfulHandlers/) may be helpful.
 
-`(:db tx-env)` is the 'proxy' db: a custom datatype, allowing you to handle it like you would a regular clj map (`assoc`, `update`, etc.), but which 'observes' what you are doing (this is done automatically 'behind the scenes'). Working in tandem with queries, this enables *shadow-grove* to efficiently refresh the UI.
+`(:db tx-env)` is the 'proxy' db: a custom datatype, allowing you to handle it like you would a regular clj map (`assoc`, `update`, etc.), but which 'observes' what you are doing: which idents were added, updated or removed (this is done automatically 'behind the scenes'). Working in tandem with queries, this enables *shadow-grove* to efficiently refresh the UI.
 
 The following helpers are available from `shadow.experiments.grove.db`:
 - Modify the db: `add`, `merge-seq`, `update-entity`, `remove`, `remove-idents`.
 - Get all data by entity type: `all-idents-of`, `all-of`.
 
-These are meant to be used inside the transaction environment, but you can test them out (and see the modifications recorded) in the REPL with a pipeline like:
+These are meant to be used inside the transaction environment, but you can try them out (and see the modifications recorded) in the REPL with a pipeline like:
 ```clojure
 (-> {} (configure schema) (transacted) (add ...) (commit!))
 ```
+
+As mentioned above, events for which no `(event ...)` handler is defined (anywhere in the component tree) will automatically run the transaction with `event-map`. This reduces boilerplate when your events don't need to handle DOM-related stuff. In the example above, if `(.ctrlKey event)` was not needed, the whole `(event ::toggle-hide!) ...` can be omitted.
+
+### fx – doing side effects
+
+*fx* is used for doing side effects during transactions (inside event handlers). fx are not supposed to modify the db. A snippet from our example:
+
+```clojure
+(ev/reg-event rt-ref ::toggle-show-hidden!
+  (fn [tx-env {:keys [show?] :as event}]
+    (-> tx-env
+      (assoc-in [:db ::show-hidden?] show?) ;; modify the db
+      (ev/queue-fx ::alert! event)))) ;; schedule an fx
+
+(ev/reg-fx rt-ref ::alert!
+  (fn [fx-env {:keys [show?] :as fx-data}]
+    (js/alert (str "Will " (when-not show? "not") " show hidden files."))))
+```
+
+`(:transact! fx-env)` allows fx to schedule another transaction, but it should be an async call. Example from [HTML History](#html-history):
+
+```clojure
+(ev/reg-fx rt-ref :ui/redirect!
+  (fn [{:keys [transact!] :as env} {:keys [token title]}]
+    ;; parts removed for clarity
+
+    (let [tokens (str/split (subs token 1) #"/")]
+      ;; forcing the transaction to be async
+      (js/setTimeout #(transact! {:e :ui/route! :token token :tokens tokens}) 0))))
+```
+
+#### `http-fx` – run HTTP requests as fx
+
+See `shadow.experiments.grove.http-fx/make-handler` docstring for complete details. Here's an annotated example.
+
+```clojure
+(ev/reg-event rt-ref ::run-api
+  (fn [env {:keys [name status]}]
+    ;; 'schedules' the http request in ::api-request 
+    (ev/queue-fx env ::api-request
+      ;; http request definition
+      {:request {:uri ["api-point" {:name name :status status}]
+                 :method :POST
+                 :body {:foo "will be turned into transit!"}}
+       ;; defines the event (tx) to trigger if the request is successful
+       :on-success {:e ::merge-api-result :foo :bar}})))
+
+(ev/reg-fx rt-ref ::api-request
+  ;; makes the http request handler taking [fx-env {:keys [request on-success]}]
+  ;; i.e. returns the actual function which runs an http request (XHR)
+  (http/make-handler
+    ;; config shared by all requests initiated by this handler
+    {:on-error {:e ::api-error} ;; tx to run on error
+     :base-url "api/" ;; ::run-api url will be "/api/api-point?name=name&status=status
+     :request-format :transit ;; will serialize request body with transit
+     :response-formats ;; customise response based on content type
+     {"application/json"
+      (fn [env ^js xhr-req]
+        (-> (http/parse-json env xhr-req) ;; the default behaviour, see http-fx/default-response-formats
+            ;; turn each json response into clj data
+            (js->clj :keywordize-keys true)))}}))
+
+;; this tx runs once the ::api-request completes successfully
+(ev/reg-event rt-ref ::merge-api-result
+  ;; the event-map will be provided with the properly formatted response of the request in `result`
+  (fn [env {:keys [result foo]}] ;; foo from ::run-api
+    (assoc-in env [:db :result] result)))
+
+(ev/reg-event rt-ref ::api-error
+  (fn [env {:keys [result status sent-request] :as e}]
+    (js/console.log "e" e)))
+```
+
+If using `transit`, add this to your `init` fn:
+```clojure
+(shadow.experiments.grove.transit/init! rt-ref)
+```
+There's also `shadow.experiments.grove.edn`.
 
 ## Dev tools
 
@@ -364,6 +477,76 @@ These are meant to be used inside the transaction environment, but you can test 
   ```
 
 
-<!-- todo -->
-- Might be a good source of info about optimizing/best practices?
-https://github.com/thheller/js-framework-shadow-shadow-grove
+## More TODO
+<!-- todo how ready is all this? --> 
+
+### HTML History
+
+The `shadow.experiments.grove.history/init!` fn enables 'UI routing' by intercepting clicks on 'internal' links and HTML `History` modifications to:
+1. update the state of `History` (e.g. update the URL)
+2. trigger the `:ui/route!` event (for which the handler is defined by the user).
+
+Usage:
+- This function should be called before component env is initialised (e.g. before `shadow.experiments.grove/render`).
+- Set the `:ui/href` attribute on anchors for internal links. (Unlike regular `href` will automatically take care of `path-prefix` and `use-fragment`.)
+- Intercepts only pure clicks with main mouse button (no keyboard modifiers).
+- Register handler for the event `{:e :ui/route! :token token :tokens tokens}`.
+- The `:ui/redirect!` *fx* handler will be registered and can be 'called' with:
+  * `:token` – URL to redirect to (a string starting with `/`)
+  * `:title` – optional. `title` arg for `history.pushState`
+
+
+```clojure
+;; in a component
+[:a {:ui/href (str "/" id)} "internal link"]
+
+;; on click, this event will change the ::main-root ident based on URL
+(ev/reg-event rt-ref :ui/route!
+  (fn [env {:keys [token tokens]}]
+    (let [ident (db/make-ident ::entity (first tokens))]
+      (-> env
+          (assoc-in [:db ::main-root] ident)
+          ;; not provided
+          (ev/queue-fx :ui/set-window-title! {:title (get-title ident)})))))
+
+;; calling init
+(defn ^:dev/after-load start []
+  (sg/render rt-ref root-el (ui-root)))
+
+(defn init []
+  (history/init! rt-ref {})
+  (start))
+```
+
+### DOM node ref
+
+```clojure
+(defc ref []
+  (bind container-ref (sg/ref))
+
+  (render (<< [:div {:dom/ref container-ref
+                     :on-click {:e ::click! :ref container-ref}}
+               "text"]))
+
+  (event ::click! [_ {:keys [ref]}]
+    (js/console.log @ref)))
+
+```
+
+### Keyboard listener
+
+Uses magic attributes and goog `KeyHandler`. You set the attribute `::keyboard/listen true` on a DOM element that wants to listen to keyboard events and create event handlers for specific keys.
+
+```clojure
+(defc keyboard []
+  (render
+    (<< [:span {::ky/listen true
+                :content-editable true}
+         "some text"]))
+
+  (event ::ky/ctrl+arrowleft [env ev e]
+    (js/console.log "ctrl+leftarrow"))
+
+  (event ::ky/ctrl+i [en ev e]
+    (js/console.log "ctrl+i")))
+```

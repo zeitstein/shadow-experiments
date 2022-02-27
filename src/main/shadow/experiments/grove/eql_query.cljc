@@ -45,7 +45,9 @@
    The methods are called with the following args:
    1. `env` - component env
    2. `db` - the db map
-   3. `current` - the entity
+   3. `current` - the entity which is the root of the query. For `query-ident`
+      this is the value corresponding to the ident, for `query-root` it is the
+      whole db map? 
    4. `query-part` – the dispatch-fn of the method, i.e. an EQL attribute
    5. `params` - optional parameters specified with EQL attributes.
 
